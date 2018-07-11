@@ -84,6 +84,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Interactively migrate a bunch of redis servers to another bunch of redis servers.')
     parser.add_argument('--src', metavar='src_url', nargs='+', required=True, help='list of source redises to sync from')
     parser.add_argument('--dst', metavar='dst_url', nargs='+', required=True, help='list of destination redises to sync to')
+    parser.add_argument('--batch', action='store_true', help='run in batch mode')
     
     args = parser.parse_args()
     
@@ -117,7 +118,7 @@ if __name__ == '__main__':
 
         writeLn(0, 0, 'Syncing %.2fMB and %s keys from %d redises'%(float(mem)/(1024*1024), valOrNA(keys), len(srcs)))
         writeLn(1, 0, 'q - Quit, s - Start', curses.A_BOLD)
-        while checkInput() != 's':
+        while not args.batch and checkInput() != 's':
             pass
         writeLn(1, 0, 'q - Quit', curses.A_BOLD)
         
@@ -149,7 +150,8 @@ if __name__ == '__main__':
                 writeLn(3, 1, 'Replication links are up, wait for master replication buffers to flush before disconnecting from sources')
                 writeLn(1, 0, 'q - Quit, e - Enable writes on destinations', curses.A_BOLD)
                 break
-            checkInput()
+            if not args.batch:
+                checkInput()
 
         # Wait for master client buffers to flush
         while True:
@@ -165,6 +167,17 @@ if __name__ == '__main__':
                 readonly = dr.config_get('slave-read-only').get('slave-read-only') if compareVersion(dr.ver, '2.6') >= 0 else 'N/A'
                 writeLn(y, 1, '%s:%s ==> %s:%s: replication buf size %s, replication buf commands: %s, dst readonly: %s  '%(redisHost(sr), redisPort(sr), redisHost(dr), redisPort(dr), bytesToStr(maxOutBuff) if maxOutBuff != None else 'N/A', valOrNA(maxOutBuffCommands), readonly))
                 y += 1
+            if args.batch:
+                for dr in dsts:
+                    if compareVersion(dr.ver, '2.6') >= 0:
+                        dr.config_set('slave-read-only', 'no')
+                for dr in dsts:
+                    dr.slaveof('no','one')
+                    if compareVersion(dr.ver, '2.6') >= 0:
+                        dr.config_set('slave-read-only', 'no')
+                    if dr.config_get('masterauth')['masterauth']: # Avoid zeroing the master auth if not required, becaues of bug in v2.2 where you can put a null value in the mastaer auth
+                        dr.config_set('masterauth', '')
+                sys.exit()
             c = checkInput()
             if c == 'e':
                 for dr in dsts:
